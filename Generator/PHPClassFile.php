@@ -78,10 +78,11 @@ class PHPClassFile extends PHPFile {
   }
 
   /**
-   * Return the summary line for the file docblock.
+   * Returns file header code.
    */
-  function file_doc_summary() {
-    return "Contains $this->qualified_class_name.";
+  function code_header() {
+    // Class files have no file docblock. Return an empty array.
+    return [];
   }
 
   /**
@@ -99,18 +100,7 @@ class PHPClassFile extends PHPFile {
     // Replace any fully-qualified classes with short class names, and keep a
     // list of the replacements to make import statements with.
     $imported_classes = [];
-    foreach ($class_code as &$line) {
-      $matches = [];
-      if (preg_match_all('@(?:\\\\(\w+))+@', $line, $matches, PREG_SET_ORDER) && !preg_match('@^\s*\*@', $line)) {
-        foreach ($matches as $match_set) {
-          $fully_qualified_class_name = $match_set[0];
-          $class_name = $match_set[1];
-          $line = preg_replace('@' . preg_quote($fully_qualified_class_name) . '@', $class_name, $line);
-
-          $imported_classes[] = ltrim($fully_qualified_class_name, '\\');
-        }
-      }
-    }
+    $this->extractFullyQualifiedClasses($class_code, $imported_classes);
 
     $return = array_merge(
       $this->code_namespace(),
@@ -132,28 +122,6 @@ class PHPClassFile extends PHPFile {
     $code[] = '';
 
     return $code;
-  }
-
-  /**
-   * Produces the namespace import statements.
-   *
-   * @param $imported_classes
-   *  (optional) An array of fully-qualified class names.
-   */
-  function imports($imported_classes = []) {
-    $imports = [];
-
-    if ($imported_classes) {
-      sort($imported_classes);
-      foreach ($imported_classes as $fully_qualified_class_name) {
-        $fully_qualified_class_name = ltrim($fully_qualified_class_name, '\\');
-        $imports[] = "use $fully_qualified_class_name;";
-      }
-
-      $imports[] = '';
-    }
-
-    return $imports;
   }
 
   /**

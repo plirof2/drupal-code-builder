@@ -61,7 +61,7 @@ class Plugin extends PHPClassFile {
       }
       else {
         // Nothing found. Throw exception.
-        throw new InvalidInputException("Plugin type not found.");
+        throw new InvalidInputException("Plugin type $plugin_type not found.");
       }
     }
 
@@ -89,8 +89,9 @@ class Plugin extends PHPClassFile {
   protected static function componentDataDefinition() {
     return array(
       'plugin_type' => array(
-        // TODO: document that plugin subdirectory can be used as well.
         'label' => 'Plugin type',
+        'description' => "The identifier of the plugin type. This can be either the manager service name with the 'plugin.manager.' prefix removed, " .
+          ' or the subdirectory name.',
         'required' => TRUE,
         'options' => function(&$property_info) {
           $mb_task_handler_report_plugins = \DrupalCodeBuilder\Factory::getTask('ReportPluginData');
@@ -217,6 +218,11 @@ class Plugin extends PHPClassFile {
    */
   function class_declaration() {
     $class_declaration = 'class ' . $this->plain_class_name;
+
+    if (isset($this->component_data['plugin_type_data']['base_class'])) {
+      $class_declaration .= " extends \\{$this->component_data['plugin_type_data']['base_class']}";
+    }
+
     if (!empty($this->injectedServices)) {
       $class_declaration .= " implements \\Drupal\\Core\\Plugin\\ContainerFactoryPluginInterface";
     }

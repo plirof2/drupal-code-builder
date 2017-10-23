@@ -5,14 +5,17 @@
  * Contains TestBase.
  */
 
-namespace DrupalCodeBuilder\Test;
+namespace DrupalCodeBuilder\Test\Unit;
+
+use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\ExpectationFailedException;
 
 /**
  * Base class for PHPUnit tests.
  *
  * Contains helper methods and assertions.
  */
-abstract class TestBase extends \PHPUnit_Framework_TestCase {
+abstract class TestBase extends TestCase {
 
   /**
    * Perform the factory setup, spoofing in the given core major version.
@@ -87,9 +90,6 @@ abstract class TestBase extends \PHPUnit_Framework_TestCase {
       'middle'  => '@^ \*[^/]@',
       'end'     => '@^ \*/@',
     ];
-    $this->helperRegexBlockLines($lines, $docblock_regexes, 'docblock');
-
-    $this->assertRegExp($empty_line_regex, array_shift($lines), 'There is a blank line after the file docblock.');
 
     $this->assertRegExp('@^namespace @', array_shift($lines), 'The file has a namespace declaration.');
     $this->assertRegExp($empty_line_regex, array_shift($lines), 'There is a blank line after the namespace.');
@@ -167,7 +167,7 @@ abstract class TestBase extends \PHPUnit_Framework_TestCase {
         // Count a successful line.
         $lines_count++;
       }
-      catch (\PHPUnit_Framework_ExpectationFailedException $e) {
+      catch (ExpectationFailedException $e) {
         // Restore the line that didn't match.
         array_unshift($lines, $line);
 
@@ -223,7 +223,7 @@ abstract class TestBase extends \PHPUnit_Framework_TestCase {
         // Count a successful middle line.
         $middle_lines_count++;
       }
-      catch (\PHPUnit_Framework_ExpectationFailedException $e) {
+      catch (ExpectationFailedException $e) {
         // Catch a failed middle line assertion failure. This is expected to be
         // the last line, so don't allow this to fail the test.
         break;

@@ -107,34 +107,104 @@ class Collect8 extends Collect {
    *  of these properties may be empty if they could not be deduced.
    */
   protected function gatherPluginTypeInfo($plugin_manager_service_ids) {
-    // Get plugin type information if Plugin module is present.
-    // This gets us labels for some plugin types (though not all, as the plugin
-    // type ID used by Plugin module doesn't always match the ID we get from
-    // the service definition, e.g. views_access vs views.access).
-    if (\Drupal::hasService('plugin.plugin_type_manager')) {
-      $plugin_types = \Drupal::service('plugin.plugin_type_manager')->getPluginTypes();
-    }
-
-    // Assemble data from each plugin manager.
+    // Assemble a basic array of plugin type data, that we will successively add
+    // data to.
     $plugin_type_data = array();
     foreach ($plugin_manager_service_ids as $plugin_manager_service_id) {
       // We identify plugin types by the part of the plugin manager service name
       // that comes after 'plugin.manager.'.
       $plugin_type_id = substr($plugin_manager_service_id, strlen('plugin.manager.'));
 
-      $data = [
+      $plugin_type_data[$plugin_type_id] = [
         'type_id' => $plugin_type_id,
-        'type_label' => isset($plugin_types[$plugin_type_id]) ?
-          $plugin_types[$plugin_type_id]->getLabel() : $plugin_type_id,
         'service_id' => $plugin_manager_service_id,
+        // Plugin module may replace this if present.
+        'type_label' => $plugin_type_id,
       ];
+    }
 
+    // Get plugin type information if Plugin module is present.
+    $this->addPluginModuleData($plugin_type_data);
+
+    // Add data from the plugin type manager service.
+    // This gets us the subdirectory, interface, and annotation name.
+    $this->addPluginTypeServiceData($plugin_type_data);
+
+    // Add data from the plugin interface (which the manager service gave us).
+    $this->addPluginInterfaceData($plugin_type_data);
+
+    // Add data from the plugin annotation class.
+    $this->addPluginAnnotationData($plugin_type_data);
+
+    // Try to detect a base class for plugins
+    $this->addPluginBaseClass($plugin_type_data);
+
+    // Sort by ID.
+    ksort($plugin_type_data);
+
+    //drush_print_r($plugin_type_data);
+
+    return $plugin_type_data;
+  }
+
+  /**
+   * Adds plugin type information from Plugin module if present.
+   *
+   * @param &$plugin_type_data
+   *  The array of plugin data.
+   */
+  protected function addPluginModuleData(&$plugin_type_data) {
+    // Bail if Plugin module isn't present.
+    if (!\Drupal::hasService('plugin.plugin_type_manager')) {
+      return;
+    }
+
+    // This gets us labels for the plugin types which are declared to Plugin
+    // module.
+    $plugin_types = \Drupal::service('plugin.plugin_type_manager')->getPluginTypes();
+
+    // We need to re-key these by the service ID, as Plugin module uses IDs for
+    // plugin types which don't always the ID we use for them based on the
+    // plugin manager service ID, , e.g. views_access vs views.access.
+    // Unfortunately, there's no accessor for this, so some reflection hackery
+    // is required until https://www.drupal.org/node/2907862 is fixed.
+    $reflection = new \ReflectionProperty(\Drupal\plugin\PluginType\PluginType::class, 'pluginManagerServiceId');
+    $reflection->setAccessible(TRUE);
+
+    foreach ($plugin_types as $plugin_type) {
+      // Get the service ID from the reflection, and then our ID.
+      $plugin_manager_service_id = $reflection->getValue($plugin_type);
+      $plugin_type_id = substr($plugin_manager_service_id, strlen('plugin.manager.'));
+
+      if (!isset($plugin_type_data[$plugin_type_id])) {
+        return;
+      }
+
+      // Replace the default label with the one from Plugin module, casting it
+      // to a string so we don't have to deal with TranslatableMarkup objects.
+      $plugin_type_data[$plugin_type_id]['type_label'] = (string) $plugin_type->getLabel();
+    }
+  }
+
+  /**
+   * Adds plugin type information from each plugin type manager service.
+   *
+   * This adds:
+   *  - subdir
+   *  - pluginInterface
+   *  - pluginDefinitionAnnotationName
+   *
+   * @param &$plugin_type_data
+   *  The array of plugin data.
+   */
+  protected function addPluginTypeServiceData(&$plugin_type_data) {
+    foreach ($plugin_type_data as $plugin_type_id => &$data) {
       // Get the service, and then get the properties that the plugin manager
       // constructor sets.
       // E.g., most plugin managers pass this to the parent:
       //   parent::__construct('Plugin/Block', $namespaces, $module_handler, 'Drupal\Core\Block\BlockPluginInterface', 'Drupal\Core\Block\Annotation\Block');
       // See Drupal\Core\Plugin\DefaultPluginManager
-      $service = \Drupal::service($plugin_manager_service_id);
+      $service = \Drupal::service($data['service_id']);
       $reflection = new \ReflectionClass($service);
 
       // The list of properties we want to grab out of the plugin manager
@@ -155,7 +225,17 @@ class Collect8 extends Collect {
         $property->setAccessible(TRUE);
         $data[$data_key] = $property->getValue($service);
       }
+    }
+  }
 
+  /**
+   * Adds plugin type information from the plugin interface.
+   *
+   * @param &$plugin_type_data
+   *  The array of plugin data.
+   */
+  protected function addPluginInterfaceData(&$plugin_type_data) {
+    foreach ($plugin_type_data as $plugin_type_id => &$data) {
       // Analyze the interface, if there is one.
       if (empty($data['plugin_interface'])) {
         $data['plugin_interface_methods'] = array();
@@ -163,30 +243,13 @@ class Collect8 extends Collect {
       else {
         $data['plugin_interface_methods'] = $this->collectPluginInterfaceMethods($data['plugin_interface']);
       }
-
-      // Now analyze the anotation.
-      if (isset($data['plugin_definition_annotation_name']) && class_exists($data['plugin_definition_annotation_name'])) {
-        $data['plugin_properties'] = $this->collectPluginAnnotationProperties($data['plugin_definition_annotation_name']);
-      }
-      else {
-        $data['plugin_properties'] = [];
-      }
-
-      $plugin_type_data[$plugin_type_id] = $data;
     }
-
-    // Sort by ID.
-    ksort($plugin_type_data);
-
-    //drush_print_r($plugin_type_data);
-
-    return $plugin_type_data;
   }
 
   /**
    * Get data for the methods of a plugin interface.
    *
-   * Helper for gatherPluginTypeInfo().
+   * Helper for addPluginInterfaceData().
    *
    * @param $plugin_interface
    *  The fully-qualified name of the interface.
@@ -205,6 +268,10 @@ class Collect8 extends Collect {
     $data = [];
 
     foreach ($methods as $method) {
+      if ($method->getName() != 'storageSettingsForm') {
+        //continue;
+      }
+
       $interface_method_data = [];
 
       $interface_method_data['name'] = $method->getName();
@@ -227,6 +294,35 @@ class Collect8 extends Collect {
         }
       }
 
+      // Replace class typehints on method parameters with their full namespaced
+      // versions, as typically these will be short class names. The PHPFile
+      // generator will then take care of extracting namespaces and creating
+      // import statements.
+      // Get the typehint classes on parameters.
+      $parameters = $method->getParameters();
+      $parameter_hinted_class_short_names = [];
+      $parameter_hinted_class_full_names = [];
+      foreach ($parameters as $parameter) {
+        $parameter_hinted_class = $parameter->getClass();
+
+        // Skip a parameter that doesn't have a class hint.
+        if (is_null($parameter_hinted_class)) {
+          continue;
+        }
+
+        // Create arrays for str_replace() of short and long classnames.
+        $parameter_hinted_class_short_names[] = $parameter_hinted_class->getShortName();
+        // The PHPFile generator works with fully-qualified classnames, with
+        // an initial '\', so we need to prepend that.
+        $parameter_hinted_class_full_names[] = '\\' . $parameter_hinted_class->getName();
+      }
+
+      $interface_method_data['declaration'] = str_replace(
+        $parameter_hinted_class_short_names,
+        $parameter_hinted_class_full_names,
+        $interface_method_data['declaration']
+      );
+
       $data[$method->getName()] = $interface_method_data;
     }
 
@@ -234,9 +330,26 @@ class Collect8 extends Collect {
   }
 
   /**
+   * Adds plugin type information from the plugin annotation class.
+   *
+   * @param &$plugin_type_data
+   *  The array of plugin data.
+   */
+  protected function addPluginAnnotationData(&$plugin_type_data) {
+    foreach ($plugin_type_data as $plugin_type_id => &$data) {
+      if (isset($data['plugin_definition_annotation_name']) && class_exists($data['plugin_definition_annotation_name'])) {
+        $data['plugin_properties'] = $this->collectPluginAnnotationProperties($data['plugin_definition_annotation_name']);
+      }
+      else {
+        $data['plugin_properties'] = [];
+      }
+    }
+  }
+
+  /**
    * Get the list of properties from an annotation class.
    *
-   * Helper for gatherPluginTypeInfo().
+   * Helper for addPluginAnnotationData().
    *
    * @param $plugin_annotation_class
    *  The fully-qualified name of the plugin annotation class.
@@ -284,6 +397,90 @@ class Collect8 extends Collect {
     }
 
     return $plugin_properties;
+  }
+
+  /**
+   * Adds plugin type information from the plugin annotation TODO!.
+   *
+   * @param &$plugin_type_data
+   *  The array of plugin data.
+   */
+  protected function addPluginBaseClass(&$plugin_type_data) {
+    foreach ($plugin_type_data as $plugin_type_id => &$data) {
+      $service = \Drupal::service($data['service_id']);
+
+      $service_class_name = get_class($service);
+      // Get the module or component that the service class is in.
+      $service_component_namespace = $this->getClassComponentNamespace($service_class_name);
+
+      // Work over each plugin of this type, until we find one with a suitable-
+      // looking ancestor class.
+      $definitions = $service->getDefinitions();
+      foreach ($definitions as $plugin_id => $definition) {
+        // We can't work with plugins that don't define a class: skip the whole
+        // plugin type.
+        if (empty($definition['class'])) {
+          goto done_plugin_type;
+        }
+
+        $plugin_component_namespace = $this->getClassComponentNamespace($definition['class']);
+
+        // Get the full ancestry of the plugin's class.
+        $plugin_class_reflection = new \ReflectionClass($definition['class']);
+
+        $class_reflection = $plugin_class_reflection;
+        $lineage = [];
+        $parent_class_component_namespace = NULL;
+        while ($class_reflection = $class_reflection->getParentClass()) {
+          $lineage[] = $class_reflection->getName();
+        }
+
+        // We want the oldest ancestor which is in the same namespace as the
+        // plugin manager. The lineage array has the oldest ancestors last.
+        while ($ancestor_class = array_pop($lineage)) {
+          $parent_class_component_namespace = $this->getClassComponentNamespace($ancestor_class);
+
+          if ($parent_class_component_namespace == $service_component_namespace) {
+            // We've found an ancestor class in the plugin's hierarchy which is
+            // in the same namespace as the plugin manager service. Assume it's
+            // a good base class, and move on to the next plugin type.
+            $data['base_class'] = $ancestor_class;
+
+            // TODO: should we check more than the first plugin we find?
+
+            goto done_plugin_type;
+          }
+        }
+      }
+
+      // Done with this plugin definition; move on to the next one.
+      done_plugin_type:
+    }
+  }
+
+  /**
+   * Gets the namespace for the component a class is in.
+   *
+   * This is either a module namespace, or a core component namespace, e.g.:
+   *  - 'Drupal\foo'
+   *  - 'Drupal\Core\Foo'
+   *  - 'Drupal\Component\Foo'
+   *
+   * @param string $class_name
+   *  The class name.
+   *
+   * @return string
+   *  The namespace.
+   */
+  protected function getClassComponentNamespace($class_name) {
+    $pieces = explode('\\', $class_name);
+
+    if ($pieces[1] == 'Core' || $pieces[1] == 'Component') {
+      return implode('\\', array_slice($pieces, 0, 3));
+    }
+    else {
+      return implode('\\', array_slice($pieces, 0, 2));
+    }
   }
 
   /**
@@ -380,6 +577,12 @@ class Collect8 extends Collect {
    * present in the codebase (rather than needing to be downloaded from an
    * online code repository viewer as is the case in previous versions of
    * Drupal).
+   *
+   * Because Drupal 8 puts api.php files in places other than module folders,
+   * keys of the return array may be in one of these forms:
+   *  - foo.api.php: The API file for foo module.
+   *  - core:foo.api.php: The API file in a Drupal component.
+   *  - core.api.php: The single core.api.php file.
    */
   protected function gatherHookDocumentationFiles() {
     // Get the hooks directory.
@@ -529,7 +732,9 @@ class Collect8 extends Collect {
     // Keys should match the filename MODULE.api.php
     $info = array(
       // Hooks on behalf of Drupal core.
-      'module' => array(
+      // api.php files that are in core rather than in a module have a prefix of
+      // 'core:'.
+      'core:module' => array(
         'hook_destinations' => array(
           '%module.install' => array(
             'hook_requirements',
